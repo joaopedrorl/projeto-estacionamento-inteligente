@@ -34,81 +34,77 @@ O projeto visa resolver a dificuldade de controle de fluxo e monitoramento de va
 
 #include <Servo.h>
 
+const byte PINO_SERVO = 9;
+const byte TRIG_ENTRADA = 7, ECHO_ENTRADA = 6;
+const byte TRIG_VAGA = 4,    ECHO_VAGA = 3;
+const byte LED_VERDE = 11,   LED_VERMELHO = 10;
+const byte PINO_BUZZER = 8;
 
-#define PINO_SERVO 9
+const int  ANGULO_FECHADA = 0;
+const int  ANGULO_ABERTA  = 90;
+const long DIST_ENTRADA_CM = 10;
+const long DIST_VAGA_CM    = 8;
+const unsigned long TEMPO_ABERTA_MS = 3000;
 
+Servo cancela;
+bool cancelaAberta = false;
+unsigned long ultimaDeteccao = 0;
 
-#define TRIG_ENTRADA 7
-#define ECHO_ENTRADA 6
+long lerDistancia(byte trig, byte echo) {
+  digitalWrite(trig, LOW);
+  delayMicroseconds(2);
+  digitalWrite(trig, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trig, LOW);
+  unsigned long duracao = pulseIn(echo, HIGH, 30000UL);
+  if (duracao == 0) return -1;   // sem eco
+  return duracao / 58;           // em cm
+}
 
-
-#define TRIG_VAGA 4
-#define ECHO_VAGA 3
-
-
-#define LED_VERDE 11
-#define LED_VERMELHO 10
-
-// Buzzer de alerta
-#define PINO_BUZZER 8
-
-Servo cancela; 
+// Mediana de 3 leituras: descarta leituras falsas
+long lerFiltrado(byte trig, byte echo) {
+  long a = lerDistancia(trig, echo); delay(10);
+  long b = lerDistancia(trig, echo); delay(10);
+  long c = lerDistancia(trig, echo);
+  return max(min(a, b), min(max(a, b), c));
+}
 
 void setup() {
   Serial.begin(9600);
-
   cancela.attach(PINO_SERVO);
-  cancela.write(0);
-
-  pinMode(TRIG_ENTRADA, OUTPUT);
-  pinMode(ECHO_ENTRADA, INPUT);
-  
-  pinMode(TRIG_VAGA, OUTPUT);
-  pinMode(ECHO_VAGA, INPUT);
-
-  // Configuração dos LEDs e Buzzer
-  pinMode(LED_VERDE, OUTPUT);
-  pinMode(LED_VERMELHO, OUTPUT);
+  cancela.write(ANGULO_FECHADA);
+  pinMode(TRIG_ENTRADA, OUTPUT); pinMode(ECHO_ENTRADA, INPUT);
+  pinMode(TRIG_VAGA, OUTPUT);    pinMode(ECHO_VAGA, INPUT);
+  pinMode(LED_VERDE, OUTPUT);    pinMode(LED_VERMELHO, OUTPUT);
   pinMode(PINO_BUZZER, OUTPUT);
 }
 
 void loop() {
+  unsigned long agora = millis();
 
-  long distanciaEntrada = lerDistancia(TRIG_ENTRADA, ECHO_ENTRADA);
+  // Entrada: abre ao detectar e só fecha 3 s depois que o carro sair
+  long dEntrada = lerFiltrado(TRIG_ENTRADA, ECHO_ENTRADA);
+  bool carroNaEntrada = dEntrada > 0 && dEntrada < DIST_ENTRADA_CM;
 
-  if (distanciaEntrada > 0 && distanciaEntrada < 10) {
-    cancela.write(90);          // Abre a cancela (90 graus)
-    tone(PINO_BUZZER, 1500);    // Emite som no buzzer
-    delay(3000);                // Mantém aberta por 3 segundos
-    noTone(PINO_BUZZER);        // Desliga o buzzer
-    cancela.write(0);           // Fecha a cancela novamente
+  if (carroNaEntrada) {
+    ultimaDeteccao = agora;
+    if (!cancelaAberta) {
+      cancela.write(ANGULO_ABERTA);
+      tone(PINO_BUZZER, 1500, 200);   // bip curto, não trava
+      cancelaAberta = true;
+    }
+  } else if (cancelaAberta && agora - ultimaDeteccao >= TEMPO_ABERTA_MS) {
+    cancela.write(ANGULO_FECHADA);
+    cancelaAberta = false;
   }
 
+  delay(30);  // evita interferência entre os sensores
 
-  long distanciaVaga = lerDistancia(TRIG_VAGA, ECHO_VAGA);
+  // Vaga
+  long dVaga = lerFiltrado(TRIG_VAGA, ECHO_VAGA);
+  bool ocupada = dVaga > 0 && dVaga < DIST_VAGA_CM;
+  digitalWrite(LED_VERMELHO, ocupada);
+  digitalWrite(LED_VERDE, !ocupada);
 
-  // Se houver um carro estacionado a menos de 8 cm no fundo da vaga
-  if (distanciaVaga > 0 && distanciaVaga < 8) {
-    digitalWrite(LED_VERMELHO, HIGH); // Vaga ocupada
-    digitalWrite(LED_VERDE, LOW);     
-  } else {
-    digitalWrite(LED_VERMELHO, LOW);  
-    digitalWrite(LED_VERDE, HIGH);    // Vaga livre
-  }
-
-  delay(200); // Pequena pausa para estabilizar as leituras
+  delay(50);
 }
-
-// Função padrão para calcular a distância com o sensor ultrassônico
-long lerDistancia(int trigPin, int echoPin) {
-  digitalWrite(trigPin, LOW);
-  delayMicroseconds(2);
-  digitalWrite(trigPin, HIGH);
-  delayMicroseconds(10);
-  digitalWrite(trigPin, LOW);
-
-  long duracao = pulseIn(echoPin, HIGH, 30000); // Timeout de segurança
-  long distancia = duracao * 0.034 / 2;        // Conversão para centímetros
-  return distancia;
-}
-
